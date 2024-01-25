@@ -1,7 +1,7 @@
 # Hydra
 
 <p align="center">
-   <img src="https://raw.githubusercontent.com/Araon/Hydra/main/docs/hydra.png" width="250" height="250">
+   <img src="https://ik.imagekit.io/ara0n/for_exceptional_broski.png" width="250" height="250">
 </p>
 
 Hydra is a task scheduler designed for educational purposes, handling high task volumes across multiple workers. 
