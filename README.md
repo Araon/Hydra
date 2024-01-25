@@ -14,4 +14,4 @@ Written in Python and C++, it comprises:
 
 Communication between components uses gRPC and http for scalability and fault tolerance.
 
-![Hydra Hero](docs/lightmode.png)
+![Hydra Hero](docs/arch.png)
