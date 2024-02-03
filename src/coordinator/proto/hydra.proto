@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package grpcapi;
+
+
+enum TaskStatus {
+  QUEUED = 0;
+  STARTED = 1;
+  COMPLETE = 2;
+  FAILED = 3;
+}
+
+// The worker service definition.
+service WorkerService {
+  // Sends a task to the worker
+  rpc SubmitTask (TaskRequest) returns (TaskResponse) {}
+}
+
+// The request message containing the task data.
+message TaskRequest {
+  string task_id = 1;
+  string data = 2;
+}
+
+// The response message containing the task result.
+message TaskResponse {
+  string task_id = 1;
+  string message = 2;
+  bool success = 3;
+}
+
+service CoordinatorService {
+  // Sends a task request to the coordinator.
+  rpc SubmitTask (ClientTaskRequest) returns (ClientTaskResponse) {}
+  // Sends a heartbeat to the server
+  rpc SendHeartbeat (HeartbeatRequest) returns (HeartbeatResponse) {}
+  // Updates a Task Status
+  rpc UpdateTaskStatus (UpdateTaskStatusRequest) returns (UpdateTaskStatusResponse){}
+}
+
+message ClientTaskRequest {
+  string data = 1;
+}
+
+message ClientTaskResponse {
+  string message = 2;
+  string task_id = 3;
+}
+
+message HeartbeatRequest {
+  uint32 workerId = 1;
+  string address = 2;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+}
+
+message UpdateTaskStatusRequest {
+  string task_id = 1;
+  TaskStatus status = 2;
+  int64 started_at = 3;
+  int64 completed_at = 4;
+  int64 failed_at = 5;
+}
+
+message UpdateTaskStatusResponse {
+  bool success = 1;
+}

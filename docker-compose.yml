@@ -13,19 +13,19 @@ services:
     ports:
       - "5432:5432"
 
-  scheduler:
-    build:
-      context: .
-      dockerfile: scheduler-dockerfile
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_HOST: postgres
-    ports:
-      - "5000:5000"
-    depends_on:
-      - postgres
+  # scheduler:
+  #   build:
+  #     context: .
+  #     dockerfile: scheduler-dockerfile
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB}
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #     POSTGRES_HOST: postgres
+  #   ports:
+  #     - "5000:5000"
+  #   depends_on:
+  #     - postgres
 
   # coordinator:
   #   build:
@@ -37,7 +37,7 @@ services:
   #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
   #     POSTGRES_HOST: postgres
   #   ports:
-  #     - "8080:8080"
+  #     - "5010:5010"
   #   depends_on:
   #     - postgres
 

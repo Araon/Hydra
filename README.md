@@ -6,7 +6,6 @@
 <img src="https://skillicons.dev/icons?i=python,go,flask,postgresql,docker" alt="https://skillicons.dev/icons?i=python,go,flask,postgresql,docker" /> 
 
 </br>
-</br>
 
 Hydra is a task scheduler designed for educational purposes, handling high task volumes across multiple workers. 
 Written in Python and GO, it comprises:
