@@ -18,3 +18,7 @@ env.bash
 
 # docker-compose volume
 data/
+
+#python env
+dev
+__pycache__
