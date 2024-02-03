@@ -23,29 +23,29 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST: postgres
     ports:
-      - "8081:8081"
+      - "5000:5000"
     depends_on:
       - postgres
 
-  coordinator:
-    build:
-      context: .
-      dockerfile: coordinator-dockerfile
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_HOST: postgres
-    ports:
-      - "8080:8080"
-    depends_on:
-      - postgres
+  # coordinator:
+  #   build:
+  #     context: .
+  #     dockerfile: coordinator-dockerfile
+  #   environment:
+  #     POSTGRES_DB: ${POSTGRES_DB}
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #     POSTGRES_HOST: postgres
+  #   ports:
+  #     - "8080:8080"
+  #   depends_on:
+  #     - postgres
 
-  worker:
-    build:
-      context: .
-      dockerfile: worker-dockerfile
-    environment:
-      WORKER_ADDRESS: worker
-    depends_on:
-      - coordinator
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: worker-dockerfile
+  #   environment:
+  #     WORKER_ADDRESS: worker
+  #   depends_on:
+  #     - coordinator
