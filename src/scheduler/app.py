@@ -43,11 +43,14 @@ class Tasks(db.Model):
 @app.route("/schedule", methods=['POST'])
 def post_schedule():
     data = request.json
+    print(data)
 
-    command = data.get('command')
+    command_data = data.get('command')
     scheduled_at = data.get('scheduled_at')
 
-    if not command or not scheduled_at:
+    print(command_data)
+
+    if not command_data or not scheduled_at:
         logger.error('Invalid POST request: Command and scheduled_at are required.')
         return jsonify({
             'error': 'Command and scheduled_at are required'
@@ -61,7 +64,7 @@ def post_schedule():
             'error': 'Invalid ISO date format'
         }), 400
 
-    new_task = Tasks(command=command, scheduled_at=scheduled_at)
+    new_task = Tasks(command=command_data, scheduled_at=scheduled_at)
     db.session.add(new_task)
     db.session.commit()
 
