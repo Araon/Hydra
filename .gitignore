@@ -22,4 +22,4 @@ data/
 #python env
 dev
 __pycache__
-
+.vscode
