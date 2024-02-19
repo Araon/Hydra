@@ -1,0 +1,13 @@
+# scheduler-dockerfile
+FROM python:3.13.0a4-slim-bullseye
+
+WORKDIR /app/src
+
+COPY requirements.txt ./
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Command to run the application
+CMD ["python", "./src/scheduler/app.py"]
