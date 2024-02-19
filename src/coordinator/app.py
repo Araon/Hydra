@@ -43,11 +43,10 @@ class CoordinatorServicer:
     def __init__(self):
         self.registered_workers = {}
         self.heartbeat_timeout = HEARTBEAT_TIMEOUT
-        self.last_assigned_worker_index = -1  # doing some round-robin masti!
+        self.last_assigned_worker_index = -1
 
-        self.fetch_tasks_interval = 5  # Fetch tasks every 5 seconds
+        self.fetch_tasks_interval = 5 
 
-        # Start a background thread for fetching tasks
         self.fetch_tasks_thread = threading.Thread(target=self.fetch_tasks_periodically, daemon=True)
         self.fetch_tasks_thread.start()
 
@@ -62,32 +61,62 @@ class CoordinatorServicer:
         '''
         self.registered_workers[worker_id] = {
             "lastHeartBeatTime": time.time(),
+            "heartBeatMissed": 0,
             "workerIp": request.json['ip'],
             "workerPort": request.json['port'],
             "metadata": request.json['metadata']
         }
         response_data = {"success": True, "message": f"Worker {worker_id} registered."}
+        logger.info(f'Worker: {worker_id} registered.')
         return json.dumps(response_data)
 
-    def unregister_worker(self):
-        worker_id = request.json['worker_id']
+    def unregister_worker(self, worker_id):
         if worker_id in self.registered_workers:
             del self.registered_workers[worker_id]
-            response_data = {"success": True, "message": f"Worker {worker_id} unregistered"}
+            logger.info(f"Worker {worker_id} unregistered")
         else:
-            response_data = {"success": False, "message": f"Worker{worker_id} not found"}
+            logger.info(f'Worker {worker_id} is not found')
 
-        return json.dumps(response_data)
+    def sendHeartBeat(self, worker_id):
+        worker_info = self.registered_workers[worker_id]
+        worker_ip = worker_info['workerIp']
+        worker_port = worker_info['workerPort']
+
+        url = f'http://{worker_ip}:{worker_port}/heartbeat'
+
+        try:
+            response = request.get(url)
+
+            if response.status_code == 200:
+                currnet_time = time.time()
+
+                self.registered_workers[worker_id] = {
+                    "lastHeartBeatTime": currnet_time,
+                    "heartBeatMissed": 0
+                }
+                logger.info(f'Got heartbeat response from worker: {worker_id}')
+            else:
+                logger.info(f'Worker {worker_id} did not responce to heartbeat')
+                self.registered_workers[worker_id]['heartBeatMissed'] += 1
+        except Exception as e:
+            logger.error(f'Error occurred while sending heartbeat to worker: {worker_id} - {str(e)}')
 
     def check_heartbeats(self):
-        current_time = time.time()
-        expired_workers = [worker_id for worker_id, last_heartbeat_time in self.registered_workers.items() if current_time - last_heartbeat_time > self.heartbeat_timeout]
 
-        for worker_id in expired_workers:
-            del self.registered_workers[worker_id]
-            logger.info(f'Unregistering worker {worker_id} due to hearbeat timeoout')
+        # we need to implement a heartbeat missed threashold and everytime -
+        # a heartbeat is sent to the worker and if it does not respond then the counter is incrimented
+        # this same function is also responsible for un registering the workers
 
-    def send_heartbeat(self, request):
+        for workerId in self.registered_workers.keys():
+            heartBeatMissed = self.registered_workers[workerId].get('heartBeatMissed')
+
+            if heartBeatMissed >= HEARTBEAT_TIMEOUT:
+                logger.info(f'Unregistering worker {workerId}')
+                self.unregister_worker(workerId)
+
+            self.sendHeartBeat(workerId)
+
+    def update_worker_status(self, request):
         worker_id = request.json['worker_id']
         if worker_id in self.registered_workers:
             response_data = {"acknowledged": True}
@@ -107,7 +136,7 @@ class CoordinatorServicer:
 
             tasks = (
                 session.query(Tasks)
-                .filter(Tasks.scheduled_at > current_time, Tasks.picked_at.is_(None))
+                .filter(Tasks.scheduled_at <= current_time, Tasks.picked_at.is_(None))
                 .order_by(Tasks.scheduled_at)
                 .limit(TASK_PICKED_LIMIT)
                 .with_for_update(skip_locked=True)
@@ -182,17 +211,12 @@ class CoordinatorServicer:
             return status
 
 
-coordinator_servicer = CoordinatorServicer()  # Create a single instance of CoordinatorServicer
+coordinator_servicer = CoordinatorServicer()
 
 
 @app.route('/register', methods=['POST'])
 def register_worker_route():
     return coordinator_servicer.register_worker(request)
-
-
-@app.route('/sendHeartBeat', methods=['POST'])
-def send_heartbeat_route():
-    return coordinator_servicer.send_heartbeat(request)
 
 
 @app.route('/jobStatusUpdate', methods=['POST'])
