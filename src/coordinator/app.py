@@ -153,7 +153,7 @@ class CoordinatorServicer:
                 for task in tasks:
                     pass
                     # print(task.id)
-                    # self.submit_task(task)
+                    self.submit_task(task)
             else:
                 logger.error('No task found')
 
@@ -176,7 +176,7 @@ class CoordinatorServicer:
             url = f'http://{worker_ip}:{worker_port}/submit'
 
             payload = {
-                'task_id': task.id,
+                'task_id': str(task.id),
                 'command': task.command
             }
 
