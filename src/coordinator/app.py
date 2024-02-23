@@ -6,6 +6,7 @@ from flask import Flask, request
 import json
 from sqlalchemy import create_engine, DateTime, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql.expression import text, func
 from sqlalchemy.ext.declarative import declarative_base
 import requests
 from config import SQLALCHEMY_DATABASE_URI
@@ -138,11 +139,12 @@ class CoordinatorServicer:
 
     def fetch_tasks(self):
         with Session() as session:
-            current_time = datetime.utcnow() + timedelta(seconds=30)
+
+            thirty_secounds_delta = func.current_timestamp() + text("INTERVAL '30 seconds'")
 
             tasks = (
                 session.query(Tasks)
-                .filter(Tasks.scheduled_at <= current_time, Tasks.picked_at.is_(None))
+                .filter(Tasks.scheduled_at >= thirty_secounds_delta, Tasks.picked_at.is_(None))
                 .order_by(Tasks.scheduled_at)
                 .limit(TASK_PICKED_LIMIT)
                 .with_for_update(skip_locked=True)
