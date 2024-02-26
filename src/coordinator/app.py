@@ -17,7 +17,7 @@ MAX_WORKER = 10
 HEARTBEAT_TIMEOUT = 3
 TASK_PICKED_LIMIT = 10
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
@@ -65,16 +65,23 @@ class CoordinatorServicer:
         - worker port
         - optional worker metadata
         '''
-        self.registered_workers[worker_id] = {
-            "lastHeartBeatTime": time.time(),
-            "heartBeatMissed": 0,
-            "workerIp": request.json['ip'],
-            "workerPort": request.json['port'].replace(":", ""),
-            "metadata": request.json['metadata']
-        }
-        response_data = {"success": True, "message": f"Worker {worker_id} registered."}
-        logger.info(f'Worker: {worker_id} registered.')
-        return json.dumps(response_data)
+
+        if worker_id in self.registered_workers:
+            logger.info('Worker is already registered')
+            response_data = {"success": True, "message": f"Worker {worker_id} already registered."}
+            return json.dumps(response_data)
+        else:
+            self.registered_workers[worker_id] = {
+                "lastHeartBeatTime": time.time(),
+                "heartBeatMissed": 0,
+                "workerIp": request.json['ip'],
+                "workerPort": request.json['port'].replace(":", ""),
+                "metadata": request.json['metadata']
+            }
+            print(self.registered_workers)
+            response_data = {"success": True, "message": f"Worker {worker_id} registered."}
+            logger.info(f'Worker: {worker_id} registered.')
+            return json.dumps(response_data)
 
     def unregister_worker(self, worker_id):
         if worker_id in self.registered_workers:
