@@ -15,7 +15,8 @@ Written in Python and GO, it comprises:
 - Worker: Executes assigned tasks, reporting status back to the Coordinator.
 - Database: PostgreSQL database stores task details, aiding task management.
 
-Communication between components uses gRPC and http for scalability and fault tolerance.
+Communication between components uses http for scalability and fault tolerance.
 
 
 ![Hydra Hero](docs/HLD.png)
+

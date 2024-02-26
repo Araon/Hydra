@@ -7,9 +7,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
+	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/shirou/gopsutil/mem"
 )
 
 type HearttbeatResponse struct {
@@ -21,17 +24,18 @@ type Task struct {
 	Command string `json:"command"`
 }
 
-var port = ":8082"
+var port = ":8081"
 
 // var workerIP = "127.0.0.1"
 var coordinatorURL = "http://127.0.0.1:5001/register"
 
 func main() {
-	workerID := generateWorkerID()
+
 	workerIP, err := getLocalIP()
 	if err != nil {
 		log.Fatalf("Error fetching IP address: %v", err)
 	}
+	workerID := "WID_" + strings.Join(strings.Split(workerIP, "."), "") + strings.Split(port, ":")[1]
 	registerWorker(workerID, workerIP)
 	http.HandleFunc("/submit", taskHandler)
 	http.HandleFunc("/heartbeat", heartBeatHandler)
@@ -49,26 +53,22 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	fmt.Printf("Task recevied Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
+	fmt.Printf("Command: %s\n", task.Command)
 
-	fmt.Printf("Task recevied Id: %s, Command: %s\n", task.Id, task.Command)
+	cmd := exec.Command(task.Command)
 
-	// run the commmand
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Println("cound not run command: ", err)
+	}
 
-	// taskStatus := "completed"
+	fmt.Println("Output: ", string(out))
 
-	// if rand.Intn(2) == 1 {
-	// 	taskStatus = "error"
-	// }
-
-	// jobStatus := JobStatusUpdate{
-	// 	TaskID: task.Id,
-	// 	Status: taskStatus,
-	// }
 	w.WriteHeader(http.StatusOK)
 }
 
 func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("got heatbeat request\n")
 	uptime := time.Since(startTime()).String()
 
 	response := HearttbeatResponse{
@@ -80,11 +80,17 @@ func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerWorker(workerID, workerIP string) {
+
+	numCPU := runtime.NumCPU()
+	vmStat, _ := mem.VirtualMemory()
 	data := map[string]interface{}{
 		"worker_id": workerID,
 		"ip":        workerIP,
 		"port":      port,
-		"metadata":  "test worker",
+		"metadata": map[string]interface{}{
+			"num_cpu":   numCPU,
+			"total_ram": vmStat.Total,
+		},
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -103,11 +109,6 @@ func registerWorker(workerID, workerIP string) {
 	}
 
 	log.Printf("Worker %s has been registered\n", workerID)
-}
-
-func generateWorkerID() string {
-	id := uuid.New()
-	return id.String()
 }
 
 func getLocalIP() (string, error) {
