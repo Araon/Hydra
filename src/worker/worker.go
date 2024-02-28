@@ -29,6 +29,8 @@ var port = ":8081"
 // var workerIP = "127.0.0.1"
 var coordinatorURL = "http://127.0.0.1:5001/register"
 
+var disAllowedCommands = []string{"rm -rf", "sudo"}
+
 func main() {
 
 	workerIP, err := getLocalIP()
@@ -53,6 +55,12 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	if isAllowedCommand(task.Command) {
+		http.Error(w, "Invalid task ID or command", http.StatusBadRequest)
+		return
+	}
+
 	fmt.Printf("Task recevied Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
 	fmt.Printf("Command: %s\n", task.Command)
 
@@ -68,6 +76,14 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func isAllowedCommand(command string) bool {
+	for _, allowed := range disAllowedCommands {
+		if command == allowed {
+			return false
+		}
+	}
+	return false
+}
 func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(startTime()).String()
 
