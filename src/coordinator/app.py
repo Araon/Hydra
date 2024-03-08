@@ -147,11 +147,14 @@ class CoordinatorServicer:
     def fetch_tasks(self):
         with Session() as session:
 
-            thirty_secounds_delta = func.current_timestamp() + text("INTERVAL '30 seconds'")
+            thirty_secounds_delta = datetime.utcnow() + timedelta(seconds=30)
+
+            print(thirty_secounds_delta)
 
             tasks = (
                 session.query(Tasks)
-                .filter(Tasks.scheduled_at >= thirty_secounds_delta, Tasks.picked_at.is_(None))
+                .filter(Tasks.scheduled_at >= thirty_secounds_delta)
+                .filter(Tasks.picked_at.is_(None))
                 .order_by(Tasks.scheduled_at)
                 .limit(TASK_PICKED_LIMIT)
                 .with_for_update(skip_locked=True)
