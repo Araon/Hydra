@@ -1,5 +1,6 @@
 package main
 
+// setup go debugger to check this code
 import (
 	"bytes"
 	"encoding/json"
@@ -20,16 +21,16 @@ type HearttbeatResponse struct {
 }
 
 type Task struct {
-	Id      string `json:"id"`
+	Id      string `json:"task_id"`
 	Command string `json:"command"`
 }
 
 var port = ":8081"
 
 // var workerIP = "127.0.0.1"
-var coordinatorURL = "http://127.0.0.1:5001/register"
+var coordinatorURL = "http://127.0.0.1:5001/register" // TODO: Pull from config file too
 
-var disAllowedCommands = []string{"rm -rf", "sudo"}
+var disAllowedCommands = []string{"rm -rf", "sudo"} // TODO: update or pull from config file.
 
 func main() {
 
@@ -45,6 +46,7 @@ func main() {
 	fmt.Printf("Worker running on port %s", port)
 }
 func taskHandler(w http.ResponseWriter, r *http.Request) {
+	// handle the task with safety
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -56,19 +58,22 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isAllowedCommand(task.Command) {
-		http.Error(w, "Invalid task ID or command", http.StatusBadRequest)
-		return
-	}
-
 	fmt.Printf("Task recevied Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
 	fmt.Printf("Command: %s\n", task.Command)
+
+	// this is not safe - need to sanitize command before executing
+
+	if !isAllowedCommand(task.Command) {
+		http.Error(w, "Command not allowed - please retry with valid error", http.StatusBadRequest)
+		fmt.Printf("Command can not be allowed")
+		return
+	}
 
 	cmd := exec.Command(task.Command)
 
 	out, err := cmd.Output()
 	if err != nil {
-		fmt.Println("cound not run command: ", err)
+		fmt.Println(" not run command: ", err)
 	}
 
 	fmt.Println("Output: ", string(out))
@@ -77,13 +82,14 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func isAllowedCommand(command string) bool {
-	for _, allowed := range disAllowedCommands {
-		if command == allowed {
+	for _, disallowed := range disAllowedCommands {
+		if strings.HasPrefix(command, disallowed) {
 			return false
 		}
 	}
-	return false
+	return true
 }
+
 func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(startTime()).String()
 
