@@ -1,6 +1,5 @@
 package main
 
-// setup go debugger to check this code
 import (
 	"bytes"
 	"encoding/json"
@@ -11,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/mem"
@@ -28,7 +28,7 @@ type Task struct {
 var port = ":8081"
 
 // var workerIP = "127.0.0.1"
-var coordinatorURL = "http://127.0.0.1:5001/register" // TODO: Pull from config file too
+var coordinatorURL = "http://127.0.0.1:5001" // TODO: Pull from config file too
 
 var disAllowedCommands = []string{"rm -rf", "sudo"} // TODO: update or pull from config file.
 
@@ -45,8 +45,13 @@ func main() {
 	log.Fatal(http.ListenAndServe(port, nil))
 	fmt.Printf("Worker running on port %s", port)
 }
+
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	// handle the task with safety
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -71,12 +76,26 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 
 	cmd := exec.Command(task.Command)
 
-	out, err := cmd.Output()
+	go func() {
+		go updateWorkerStatus(task.Id, "STARTED")
+		fmt.Println("Command execution started for: ", task.Id)
+		wg.Done()
+
+	}()
+
+	err := cmd.Run()
+
 	if err != nil {
-		fmt.Println(" not run command: ", err)
+		fmt.Println("Failed to run command:", err)
+		wg.Wait()
+		go updateWorkerStatus(task.Id, "FAILED")
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
-	fmt.Println("Output: ", string(out))
+	wg.Wait()
+	go updateWorkerStatus(task.Id, "COMPLETED")
+	fmt.Println("Command execution completed successfully")
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -119,7 +138,9 @@ func registerWorker(workerID, workerIP string) {
 		log.Fatalf("Error encoding JSON: %v", err)
 	}
 
-	resp, err := http.Post(coordinatorURL, "application/json", bytes.NewBuffer(jsonData))
+	registerWorkerURL := coordinatorURL + "/register"
+
+	resp, err := http.Post(registerWorkerURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Fatalf("Error registering to coordinator: %v", err)
 	}
@@ -131,6 +152,34 @@ func registerWorker(workerID, workerIP string) {
 	}
 
 	log.Printf("Worker %s has been registered\n", workerID)
+}
+
+func updateWorkerStatus(taskId, output string) {
+	// sends task update to the coordinator
+	data := map[string]interface{}{
+		"task_id": taskId,
+		"status":  output,
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.Fatalf("Error encoding JSON: %v", err)
+	}
+
+	jobUpdateURL := coordinatorURL + "/jobStatusUpdate"
+
+	resp, err := http.Post(jobUpdateURL, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Error sending task update to coordinator: %v", err)
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("Unable to connect to coordinator: %v", resp.StatusCode)
+	}
+
+	log.Printf("Task_id: %s has been Updated with status: %s\n", taskId, output)
 }
 
 func getLocalIP() (string, error) {

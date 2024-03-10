@@ -93,7 +93,7 @@ def get_schedule(task_id):
         'failed_at': task.failed_at.isoformat() if task.failed_at else None
     }
     logger.info(f'Task with ID {task_id} retrieved successfully.')
-    return jsonify({'task': task_data})
+    return jsonify({'task': task_data}), 200
 
 
 if __name__ == "__main__":
