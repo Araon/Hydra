@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 import time
 import threading
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import json
 from sqlalchemy import create_engine, DateTime, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
@@ -91,7 +91,7 @@ class CoordinatorServicer:
             logger.info(f'Worker {worker_id} is not found')
 
     def sendHeartBeat(self, worker_id):
-        logger.info(f"Sending heartbeat to {worker_id}")
+        # logger.info(f"Sending heartbeat to {worker_id}")
         worker_info = self.registered_workers[worker_id]
         worker_ip = worker_info['workerIp']
         worker_port = worker_info['workerPort']
@@ -107,7 +107,7 @@ class CoordinatorServicer:
                 self.registered_workers[worker_id]["lastHeartBeatTime"] = current_time
                 self.registered_workers[worker_id]["heartBeatMissed"] = 0
 
-                logger.info(f'Got heartbeat response from worker: {worker_id}')
+                # logger.info(f'Got heartbeat response from worker: {worker_id}')
             else:
                 logger.info(f'Worker {worker_id} did not responce to heartbeat')
                 self.registered_workers[worker_id]['heartBeatMissed'] += 1
@@ -149,11 +149,10 @@ class CoordinatorServicer:
 
             thirty_secounds_delta = datetime.utcnow() + timedelta(seconds=30)
 
-            print(thirty_secounds_delta)
-
             tasks = (
                 session.query(Tasks)
-                .filter(Tasks.scheduled_at >= thirty_secounds_delta)
+                .filter(Tasks.scheduled_at >= datetime.utcnow())
+                .filter(Tasks.scheduled_at <= thirty_secounds_delta)
                 .filter(Tasks.picked_at.is_(None))
                 .order_by(Tasks.scheduled_at)
                 .limit(TASK_PICKED_LIMIT)
@@ -163,11 +162,8 @@ class CoordinatorServicer:
 
             if tasks and len(tasks) > 0:
                 for task in tasks:
-                    pass
                     # print(task.id)
                     self.submit_task(task)
-            else:
-                logger.error('No task found')
 
     def submit_task(self, task):
 
@@ -194,9 +190,9 @@ class CoordinatorServicer:
 
             try:
                 response = requests.post(url, json=payload)
-                print(payload)
                 if response.status_code == 200:
                     logger.info(f'Task {task.id} submitted to {selected_worker}')
+
                 else:
                     logger.error(f'Faild to submit task {task.id} to {selected_worker}')
             except Exception as e:
@@ -207,14 +203,16 @@ class CoordinatorServicer:
     def update_job_status(self, request):
         task_id = request.json['task_id']
         status = request.json['status']
-        current_time = datetime.utcnow()
+        current_time = datetime.utcnow().isoformat()
+        logger.info(f'Updating task status for task_id: {task_id}')
 
         with Session() as session:
             task = session.query(Tasks).filter_by(id=task_id).first()
 
             if not task:
-                res_status = {"success": False, "message": f"Task {task_id} not found"}
-                return json.dumps(res_status)
+                task_status = {"success": False, "message": f"Task {task_id} not found"}
+                return jsonify(task_status), 404
+                # return json.dumps(res_status)
 
             if status == "STARTED":
                 task.started_at = current_time
@@ -224,11 +222,15 @@ class CoordinatorServicer:
                 task.failed_at = current_time
             else:
                 task_status = {"success": False, "message": f"Invalid task status for {task_id}"}
-                return json.dumps(task_status)
+                return jsonify(task_status), 404
+                # return json.dumps(task_status)
 
             session.commit()
-            status = {"success": True, "message": f"Task {task_id} updated successfully"}
-            return status
+            task_status = {"success": True, "message": f"Task {task_id} updated successfully"}
+            logger.info(f'{task_id} updated with status {status} at {current_time}')
+            return jsonify(task_status), 200
+
+            # return json.dumps(task_status)
 
 
 coordinator_servicer = CoordinatorServicer()
