@@ -86,14 +86,14 @@ def get_schedule(task_id):
     task_data = {
         'id': task.id,
         'command': task.command,
-        'scheduled_at': task.scheduled_at.isoformat() if task.scheduled_at else None,
-        'picked_at': task.picked_at.isoformat() if task.picked_at else None,
-        'started_at': task.started_at.isoformat() if task.started_at else None,
-        'completed_at': task.completed_at.isoformat() if task.completed_at else None,
-        'failed_at': task.failed_at.isoformat() if task.failed_at else None
+        'scheduled_at': task.scheduled_at if task.scheduled_at else None,
+        'picked_at': task.picked_at if task.picked_at else None,
+        'started_at': task.started_at if task.started_at else None,
+        'completed_at': task.completed_at if task.completed_at else None,
+        'failed_at': task.failed_at if task.failed_at else None
     }
     logger.info(f'Task with ID {task_id} retrieved successfully.')
-    return jsonify({'task': task_data}), 200
+    return jsonify(task_data), 200
 
 
 if __name__ == "__main__":

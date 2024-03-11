@@ -66,8 +66,6 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Task recevied Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
 	fmt.Printf("Command: %s\n", task.Command)
 
-	// this is not safe - need to sanitize command before executing
-
 	if !isAllowedCommand(task.Command) {
 		http.Error(w, "Command not allowed - please retry with valid error", http.StatusBadRequest)
 		fmt.Printf("Command can not be allowed")
@@ -96,8 +94,8 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 	go updateWorkerStatus(task.Id, "COMPLETED")
 	fmt.Println("Command execution completed successfully")
-
 	w.WriteHeader(http.StatusOK)
+
 }
 
 func isAllowedCommand(command string) bool {

@@ -1,3 +1,2 @@
 [flake8]
 ignore = F401, E501
-exclude = src/coordinator/hydra_pb2.py, src/coordinator/hydra_pb2_grpc.py

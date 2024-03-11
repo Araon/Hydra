@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, DateTime, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql.expression import text, func
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.exc import SQLAlchemyError
 import requests
 from config import SQLALCHEMY_DATABASE_URI
 
@@ -60,7 +61,7 @@ class CoordinatorServicer:
         worker_id = request.json['worker_id']
         '''
         Worker data that needs to be saved on registration
-        - worker_id - key
+        - worker_id -> key
         - worker ip
         - worker port
         - optional worker metadata
@@ -91,7 +92,6 @@ class CoordinatorServicer:
             logger.info(f'Worker {worker_id} is not found')
 
     def sendHeartBeat(self, worker_id):
-        # logger.info(f"Sending heartbeat to {worker_id}")
         worker_info = self.registered_workers[worker_id]
         worker_ip = worker_info['workerIp']
         worker_port = worker_info['workerPort']
@@ -107,7 +107,6 @@ class CoordinatorServicer:
                 self.registered_workers[worker_id]["lastHeartBeatTime"] = current_time
                 self.registered_workers[worker_id]["heartBeatMissed"] = 0
 
-                # logger.info(f'Got heartbeat response from worker: {worker_id}')
             else:
                 logger.info(f'Worker {worker_id} did not responce to heartbeat')
                 self.registered_workers[worker_id]['heartBeatMissed'] += 1
@@ -117,9 +116,6 @@ class CoordinatorServicer:
 
     def check_heartbeats(self):
 
-        # we need to implement a heartbeat missed threashold and everytime -
-        # a heartbeat is sent to the worker and if it does not respond then the counter is incrimented
-        # this same function is also responsible for un registering the workers
         while True:
             for workerId in list(self.registered_workers.keys()):
                 heartBeatMissed = self.registered_workers[workerId].get('heartBeatMissed')
@@ -160,16 +156,17 @@ class CoordinatorServicer:
                 .all()
             )
 
-            if tasks and len(tasks) > 0:
-                for task in tasks:
-                    # print(task.id)
-                    self.submit_task(task)
+        if tasks and len(tasks) > 0:
+            for task in tasks:
+                self.submit_task(task)
 
     def submit_task(self, task):
 
         available_workers = list(self.registered_workers.keys())
 
         if available_workers and len(available_workers) > 0:
+            # task picked up to be sent to worker
+            self.update_picked_at(task_id=task.id)
 
             # https://en.wikipedia.org/wiki/Round-robin_scheduling
             self.last_assigned_worker_index = (self.last_assigned_worker_index + 1) % len(available_workers)
@@ -192,13 +189,33 @@ class CoordinatorServicer:
                 response = requests.post(url, json=payload)
                 if response.status_code == 200:
                     logger.info(f'Task {task.id} submitted to {selected_worker}')
-
                 else:
                     logger.error(f'Faild to submit task {task.id} to {selected_worker}')
             except Exception as e:
                 logger.error(f'Error occurred while submitting task {task.id} to {selected_worker}: {str(e)}')
+
         else:
             logger.error('No worker present')
+
+    def update_picked_at(self, task_id):
+
+        with Session() as session:
+            try:
+
+                task = session.query(Tasks).filter_by(id=task_id).first()
+
+                if not task:
+                    logger.error(f'Task: {task_id} not found to update picked_at')
+                    return
+
+                task.picked_at = datetime.utcnow()
+
+                session.commit()
+                logger.info(f'{task_id} updated with picked_at {task.picked_at.isoformat()}')
+
+            except SQLAlchemyError as e:
+                logger.error(f'Error updating picked_at for task {task_id}: {str(e)}')
+                return
 
     def update_job_status(self, request):
         task_id = request.json['task_id']
@@ -212,7 +229,6 @@ class CoordinatorServicer:
             if not task:
                 task_status = {"success": False, "message": f"Task {task_id} not found"}
                 return jsonify(task_status), 404
-                # return json.dumps(res_status)
 
             if status == "STARTED":
                 task.started_at = current_time
@@ -223,14 +239,11 @@ class CoordinatorServicer:
             else:
                 task_status = {"success": False, "message": f"Invalid task status for {task_id}"}
                 return jsonify(task_status), 404
-                # return json.dumps(task_status)
 
             session.commit()
             task_status = {"success": True, "message": f"Task {task_id} updated successfully"}
             logger.info(f'{task_id} updated with status {status} at {current_time}')
             return jsonify(task_status), 200
-
-            # return json.dumps(task_status)
 
 
 coordinator_servicer = CoordinatorServicer()
