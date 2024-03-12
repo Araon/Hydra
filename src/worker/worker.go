@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -26,13 +27,20 @@ type Task struct {
 }
 
 var port = ":8081"
+var coordinatorURL = os.Getenv("COORDINATOR_URL")
 
 // var workerIP = "127.0.0.1"
-var coordinatorURL = "http://127.0.0.1:5001" // TODO: Pull from config file too
+
+// var coordinatorURL = "http://127.0.0.1:5001" // TODO: Pull from config file too
 
 var disAllowedCommands = []string{"rm -rf", "sudo"} // TODO: update or pull from config file.
 
 func main() {
+
+	if coordinatorURL == "" {
+		coordinatorURL = "http://127.0.0.1:5001"
+	}
+	fmt.Println("Coordinator URL:", coordinatorURL)
 
 	workerIP, err := getLocalIP()
 	if err != nil {

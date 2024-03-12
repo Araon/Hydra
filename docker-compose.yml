@@ -12,26 +12,32 @@ services:
       - ./data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-  
-  # scheduler:
-  #   build: ./src/scheduler/scheduler-dockerfile
-  #   ports:
-  #     - "5000:5000"
-  #   depends_on:
-  #     - postgres
 
-  # coordinator:
-  #   build: ./src/coordinator/coordinator-dockerfile
-  #   ports:
-  #     - "5001:5001"
-  #   depends_on:
-  #     - postgres
+  scheduler:
+    build:
+      context: ./src/scheduler
+      dockerfile: scheduler.dockerfile
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
 
-  # worker:
-  #   build: ./src/worker/worker-dockerfile
-  #   environment:
-  #     COORDINATOR_URL: "http://coordinator:5001/register"
-  #   depends_on:
-  #     - coordinator
-  #   deploy:
-  #     replicas: 1
+  coordinator:
+    build:
+      context: ./src/coordinator
+      dockerfile: coordinator.dockerfile
+    ports:
+      - "5001:5001"
+    depends_on:
+      - postgres
+
+  worker:
+    build: 
+      context: ./src/worker
+      dockerfile: worker.dockerfile
+    environment:
+      COORDINATOR_URL: "http://coordinator:5001"
+    depends_on:
+      - coordinator
+    deploy:
+      replicas: 5
