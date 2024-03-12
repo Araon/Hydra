@@ -39,5 +39,3 @@ services:
       COORDINATOR_URL: "http://coordinator:5001"
     depends_on:
       - coordinator
-    deploy:
-      replicas: 5
