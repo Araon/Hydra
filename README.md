@@ -11,6 +11,20 @@ Hydra is a task scheduler designed for handling high task volumes across multipl
 
 ![Hydra Hero](docs/HLD.png)
 
+## Run locally 💻
+create a .env file with the following details
+```.env
+POSTGRES_DB=
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+```
+and then run the following command to build and run using docker
+
+```bash
+docker compose up --scale worker=3
+```
+
+## Details
 Written in Python and GO, it comprises:
 
 - Scheduler: Receives tasks and schedules them for execution.
