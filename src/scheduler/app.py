@@ -12,9 +12,13 @@ from config import SQLALCHEMY_DATABASE_URI
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
 
+# Initialize extensions without binding to app immediately to allow test overrides
+db = SQLAlchemy()
+migrate = Migrate()
 
-db = SQLAlchemy(app)
-migrate = Migrate(app, db)
+# Bind extensions to the app
+db.init_app(app)
+migrate.init_app(app, db)
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -93,7 +97,7 @@ def get_schedule(task_id):
         'failed_at': task.failed_at if task.failed_at else None
     }
     logger.info(f'Task with ID {task_id} retrieved successfully.')
-    return jsonify(task_data), 200
+    return jsonify({'task': task_data}), 200
 
 
 if __name__ == "__main__":

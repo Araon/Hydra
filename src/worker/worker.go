@@ -71,7 +71,7 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("Task recevied Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
+	fmt.Printf("Task received Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
 	fmt.Printf("Command: %s\n", task.Command)
 
 	if !isAllowedCommand(task.Command) {
