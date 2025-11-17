@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timedelta
 import time
 import threading
@@ -42,6 +43,19 @@ Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 
 
+def _get_session_factory():
+    """Return the Session factory. Prefer coordinator_service.Session if tests have patched it."""
+    try:
+        import coordinator_service as cs
+        svc_session = getattr(cs, 'Session', None)
+        if svc_session:
+            return svc_session
+    except Exception:
+        pass
+
+    return Session
+
+
 class CoordinatorServicer:
     def __init__(self):
         self.registered_workers = {}
@@ -62,7 +76,13 @@ class CoordinatorServicer:
         self.heartbeat_check_thread.start()
 
     def register_worker(self, request):
-        worker_id = request.json['worker_id']
+        # support both Flask request (request.json) and test mocks where request.json is callable
+        if isinstance(request, dict):
+            json_data = request
+        else:
+            json_data = request.json() if callable(getattr(request, 'json', None)) else request.json
+
+        worker_id = json_data['worker_id']
         '''
         Worker data that needs to be saved on registration
         - worker_id -> key
@@ -76,18 +96,19 @@ class CoordinatorServicer:
                 logger.info('Worker is already registered')
                 response_data = {"success": True, "message": f"Worker {worker_id} already registered."}
                 return json.dumps(response_data)
-            else:
-                self.registered_workers[worker_id] = {
-                    "lastHeartBeatTime": time.time(),
-                    "heartBeatMissed": 0,
-                    "workerIp": request.json['ip'],
-                    "workerPort": request.json['port'].replace(":", ""),
-                    "metadata": request.json['metadata']
-                }
-                print(self.registered_workers)
-                response_data = {"success": True, "message": f"Worker {worker_id} registered."}
-                logger.info(f'Worker: {worker_id} registered.')
-                return json.dumps(response_data)
+
+            self.registered_workers[worker_id] = {
+                "lastHeartBeatTime": time.time(),
+                "heartBeatMissed": 0,
+                "workerIp": json_data['ip'],
+                "workerPort": str(json_data['port']).replace(":", ""),
+                "metadata": json_data.get('metadata')
+            }
+
+        print(self.registered_workers)
+        response_data = {"success": True, "message": f"Worker {worker_id} registered."}
+        logger.info(f'Worker: {worker_id} registered.')
+        return json.dumps(response_data)
 
     def unregister_worker(self, worker_id):
         with self.lock:
@@ -107,6 +128,14 @@ class CoordinatorServicer:
         worker_port = worker_info['workerPort']
 
         url = f'http://{worker_ip}:{worker_port}/heartbeat'
+
+        # Allow tests to skip real network heartbeats by setting SKIP_NETWORK_CALLS
+        if os.environ.get("SKIP_NETWORK_CALLS", "0") in ("1", "true", "True"):
+            with self.lock:
+                if worker_id in self.registered_workers:
+                    self.registered_workers[worker_id]["lastHeartBeatTime"] = time.time()
+                    self.registered_workers[worker_id]["heartBeatMissed"] = 0
+            return
 
         try:
             response = requests.get(url, timeout=5)
@@ -145,7 +174,13 @@ class CoordinatorServicer:
             time.sleep(self.heartbeatInterval)
 
     def update_worker_status(self, request):
-        worker_id = request.json['worker_id']
+        if isinstance(request, dict):
+            json_data = request
+        else:
+            json_data = request.json() if callable(getattr(request, 'json', None)) else request.json
+
+        worker_id = json_data['worker_id']
+
         with self.lock:
             exists = worker_id in self.registered_workers
 
@@ -161,20 +196,27 @@ class CoordinatorServicer:
             time.sleep(self.fetch_tasks_interval)
 
     def fetch_tasks(self):
-        with Session() as session:
-
+        session = _get_session_factory()()
+        try:
             thirty_secounds_delta = datetime.utcnow() + timedelta(seconds=30)
 
             tasks = (
                 session.query(Tasks)
-                .filter(Tasks.scheduled_at >= datetime.utcnow())
-                .filter(Tasks.scheduled_at <= thirty_secounds_delta)
-                .filter(Tasks.picked_at.is_(None))
+                .filter(
+                    Tasks.scheduled_at >= datetime.utcnow(),
+                    Tasks.scheduled_at <= thirty_secounds_delta,
+                    Tasks.picked_at.is_(None),
+                )
                 .order_by(Tasks.scheduled_at)
                 .limit(TASK_PICKED_LIMIT)
                 .with_for_update(skip_locked=True)
                 .all()
             )
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
         if tasks and len(tasks) > 0:
             for task in tasks:
@@ -222,10 +264,9 @@ class CoordinatorServicer:
             logger.error('No worker present')
 
     def update_picked_at(self, task_id):
-
-        with Session() as session:
+        session = _get_session_factory()()
+        try:
             try:
-
                 task = session.query(Tasks).filter_by(id=task_id).first()
 
                 if not task:
@@ -240,18 +281,32 @@ class CoordinatorServicer:
             except SQLAlchemyError as e:
                 logger.error(f'Error updating picked_at for task {task_id}: {str(e)}')
                 return
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
     def update_job_status(self, request):
-        task_id = request.json['task_id']
-        status = request.json['status']
+        # support dict input (unit tests) or Flask request
+        if isinstance(request, dict):
+            json_data = request
+        else:
+            json_data = request.json() if callable(getattr(request, 'json', None)) else request.json
+
+        task_id = json_data['task_id']
+        status = json_data['status']
         current_time = datetime.utcnow()
         logger.info(f'Updating task status for task_id: {task_id}')
 
-        with Session() as session:
+        session = _get_session_factory()()
+        try:
             task = session.query(Tasks).filter_by(id=task_id).first()
 
             if not task:
                 task_status = {"success": False, "message": f"Task {task_id} not found"}
+                if isinstance(request, dict):
+                    return json.dumps(task_status)
                 return jsonify(task_status), 404
 
             if status == "STARTED":
@@ -262,12 +317,21 @@ class CoordinatorServicer:
                 task.failed_at = current_time
             else:
                 task_status = {"success": False, "message": f"Invalid task status for {task_id}"}
+                if isinstance(request, dict):
+                    return json.dumps(task_status)
                 return jsonify(task_status), 404
 
             session.commit()
             task_status = {"success": True, "message": f"Task {task_id} updated successfully"}
             logger.info(f'{task_id} updated with status {status} at {current_time}')
+            if isinstance(request, dict):
+                return json.dumps(task_status)
             return jsonify(task_status), 200
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
 
 coordinator_servicer = CoordinatorServicer()

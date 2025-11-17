@@ -38,3 +38,26 @@ services:
       COORDINATOR_URL: "http://coordinator:5001"
     depends_on:
       - coordinator
+
+  tests:
+    build:
+      context: .
+      dockerfile: ./src/scheduler/scheduler.dockerfile
+    depends_on:
+      - postgres
+      - scheduler
+      - coordinator
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_HOST=postgres
+      - PYTHONPATH=/app
+      - 'SQLALCHEMY_DATABASE_URI=sqlite:///:memory:'
+      - 'SKIP_NETWORK_CALLS=1'
+      - 'BASE_URL=http://scheduler:5000'
+    command: pytest -q
+    volumes:
+      - ./:/app
+    working_dir: /app
