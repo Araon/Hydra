@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify
 import json
 from sqlalchemy import create_engine, DateTime, Column, Integer, String
@@ -44,17 +45,20 @@ Session = sessionmaker(bind=engine)
 class CoordinatorServicer:
     def __init__(self):
         self.registered_workers = {}
+        self.lock = threading.Lock()
         self.heartbeat_timeout = HEARTBEAT_TIMEOUT
         self.last_assigned_worker_index = -1
 
         self.fetch_tasks_interval = 5
         self.heartbeatInterval = 3
 
+        # Executor for concurrent network calls (heartbeats / submissions)
+        self.executor = ThreadPoolExecutor(max_workers=20)
+
         self.fetch_tasks_thread = threading.Thread(target=self.fetch_tasks_periodically, daemon=True)
         self.fetch_tasks_thread.start()
 
         self.heartbeat_check_thread = threading.Thread(target=self.check_heartbeats, daemon=True)
-
         self.heartbeat_check_thread.start()
 
     def register_worker(self, request):
@@ -67,69 +71,85 @@ class CoordinatorServicer:
         - optional worker metadata
         '''
 
-        if worker_id in self.registered_workers:
-            logger.info('Worker is already registered')
-            response_data = {"success": True, "message": f"Worker {worker_id} already registered."}
-            return json.dumps(response_data)
-        else:
-            self.registered_workers[worker_id] = {
-                "lastHeartBeatTime": time.time(),
-                "heartBeatMissed": 0,
-                "workerIp": request.json['ip'],
-                "workerPort": request.json['port'].replace(":", ""),
-                "metadata": request.json['metadata']
-            }
-            print(self.registered_workers)
-            response_data = {"success": True, "message": f"Worker {worker_id} registered."}
-            logger.info(f'Worker: {worker_id} registered.')
-            return json.dumps(response_data)
+        with self.lock:
+            if worker_id in self.registered_workers:
+                logger.info('Worker is already registered')
+                response_data = {"success": True, "message": f"Worker {worker_id} already registered."}
+                return json.dumps(response_data)
+            else:
+                self.registered_workers[worker_id] = {
+                    "lastHeartBeatTime": time.time(),
+                    "heartBeatMissed": 0,
+                    "workerIp": request.json['ip'],
+                    "workerPort": request.json['port'].replace(":", ""),
+                    "metadata": request.json['metadata']
+                }
+                print(self.registered_workers)
+                response_data = {"success": True, "message": f"Worker {worker_id} registered."}
+                logger.info(f'Worker: {worker_id} registered.')
+                return json.dumps(response_data)
 
     def unregister_worker(self, worker_id):
-        if worker_id in self.registered_workers:
-            del self.registered_workers[worker_id]
-            logger.info(f"Worker {worker_id} unregistered, Missed heartbeat {HEARTBEAT_TIMEOUT}")
-        else:
-            logger.info(f'Worker {worker_id} is not found')
+        with self.lock:
+            if worker_id in self.registered_workers:
+                del self.registered_workers[worker_id]
+                logger.info(f"Worker {worker_id} unregistered, Missed heartbeat {HEARTBEAT_TIMEOUT}")
+            else:
+                logger.info(f'Worker {worker_id} is not found')
 
     def sendHeartBeat(self, worker_id):
-        worker_info = self.registered_workers[worker_id]
+        with self.lock:
+            worker_info = self.registered_workers.get(worker_id)
+
+        if not worker_info:
+            return
         worker_ip = worker_info['workerIp']
         worker_port = worker_info['workerPort']
 
         url = f'http://{worker_ip}:{worker_port}/heartbeat'
 
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=5)
 
-            if response.status_code == 200:
-                current_time = time.time()
-
-                self.registered_workers[worker_id]["lastHeartBeatTime"] = current_time
-                self.registered_workers[worker_id]["heartBeatMissed"] = 0
-
-            else:
-                logger.info(f'Worker {worker_id} did not responce to heartbeat')
-                self.registered_workers[worker_id]['heartBeatMissed'] += 1
+            with self.lock:
+                if response.status_code == 200:
+                    current_time = time.time()
+                    self.registered_workers[worker_id]["lastHeartBeatTime"] = current_time
+                    self.registered_workers[worker_id]["heartBeatMissed"] = 0
+                else:
+                    logger.info(f'Worker {worker_id} did not responce to heartbeat')
+                    self.registered_workers[worker_id]['heartBeatMissed'] += 1
         except Exception as e:
             logger.error(f'Error occurred while sending heartbeat to worker: {worker_id} - {str(e)}')
-            self.registered_workers[worker_id]['heartBeatMissed'] += 1  # Increment missed count on error
+            with self.lock:
+                if worker_id in self.registered_workers:
+                    self.registered_workers[worker_id]['heartBeatMissed'] += 1  # Increment missed count on error
 
     def check_heartbeats(self):
 
         while True:
-            for workerId in list(self.registered_workers.keys()):
-                heartBeatMissed = self.registered_workers[workerId].get('heartBeatMissed')
+            with self.lock:
+                worker_ids = list(self.registered_workers.keys())
 
-                if heartBeatMissed >= HEARTBEAT_TIMEOUT:
+            for workerId in worker_ids:
+                with self.lock:
+                    heartBeatMissed = self.registered_workers.get(workerId, {}).get('heartBeatMissed')
+
+                if heartBeatMissed is not None and heartBeatMissed >= HEARTBEAT_TIMEOUT:
                     self.unregister_worker(workerId)
                     break
 
-                self.sendHeartBeat(workerId)
+                # Send heartbeat concurrently
+                self.executor.submit(self.sendHeartBeat, workerId)
+
             time.sleep(self.heartbeatInterval)
 
     def update_worker_status(self, request):
         worker_id = request.json['worker_id']
-        if worker_id in self.registered_workers:
+        with self.lock:
+            exists = worker_id in self.registered_workers
+
+        if exists:
             response_data = {"acknowledged": True}
         else:
             response_data = {"acknowledged": False}
@@ -185,14 +205,18 @@ class CoordinatorServicer:
                 'command': task.command
             }
 
-            try:
-                response = requests.post(url, json=payload)
-                if response.status_code == 200:
-                    logger.info(f'Task {task.id} submitted to {selected_worker}')
-                else:
-                    logger.error(f'Faild to submit task {task.id} to {selected_worker}')
-            except Exception as e:
-                logger.error(f'Error occurred while submitting task {task.id} to {selected_worker}: {str(e)}')
+            # Submit task asynchronously so coordinator doesn't block on slow workers
+            def _post_task(u, p, worker):
+                try:
+                    response = requests.post(u, json=p, timeout=10)
+                    if response.status_code == 200:
+                        logger.info(f'Task {task.id} submitted to {worker}')
+                    else:
+                        logger.error(f'Faild to submit task {task.id} to {worker} - status {response.status_code}')
+                except Exception as e:
+                    logger.error(f'Error occurred while submitting task {task.id} to {worker}: {str(e)}')
+
+            self.executor.submit(_post_task, url, payload, selected_worker)
 
         else:
             logger.error('No worker present')
@@ -220,7 +244,7 @@ class CoordinatorServicer:
     def update_job_status(self, request):
         task_id = request.json['task_id']
         status = request.json['status']
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.utcnow()
         logger.info(f'Updating task status for task_id: {task_id}')
 
         with Session() as session:
