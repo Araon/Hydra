@@ -17,7 +17,7 @@ import (
 	"github.com/shirou/gopsutil/mem"
 )
 
-type HearttbeatResponse struct {
+type HeartbeatResponse struct {
 	Uptime string `json:"uptime"`
 }
 
@@ -47,7 +47,16 @@ func main() {
 		log.Fatalf("Error fetching IP address: %v", err)
 	}
 	workerID := "WID_" + strings.Join(strings.Split(workerIP, "."), "") + strings.Split(port, ":")[1]
-	registerWorker(workerID, workerIP)
+	
+	for {
+		err := registerWorker(workerID, workerIP)
+		if err == nil {
+			break
+		}
+		log.Printf("Failed to register worker: %v. Retrying in 5 seconds...", err)
+		time.Sleep(5 * time.Second)
+	}
+	
 	http.HandleFunc("/submit", taskHandler)
 	http.HandleFunc("/heartbeat", heartBeatHandler)
 	log.Fatal(http.ListenAndServe(port, nil))
@@ -56,9 +65,6 @@ func main() {
 
 func taskHandler(w http.ResponseWriter, r *http.Request) {
 	// handle the task with safety
-
-	var wg sync.WaitGroup
-	wg.Add(1)
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -80,35 +86,38 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd := exec.Command(task.Command)
+	// Synchronously update status to STARTED
+	if err := updateWorkerStatus(task.Id, "STARTED"); err != nil {
+		log.Printf("Failed to send STARTED status: %v", err)
+	}
+	fmt.Println("Command execution started for: ", task.Id)
 
-	go func() {
-		go updateWorkerStatus(task.Id, "STARTED")
-		fmt.Println("Command execution started for: ", task.Id)
-		wg.Done()
-
-	}()
+	// Use sh -c for command execution to support arguments
+	cmd := exec.Command("sh", "-c", task.Command)
 
 	err := cmd.Run()
 
 	if err != nil {
 		fmt.Println("Failed to run command:", err)
-		wg.Wait()
-		go updateWorkerStatus(task.Id, "FAILED")
+		if updateErr := updateWorkerStatus(task.Id, "FAILED"); updateErr != nil {
+			log.Printf("Failed to send FAILED status: %v", updateErr)
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	wg.Wait()
-	go updateWorkerStatus(task.Id, "COMPLETED")
+	if updateErr := updateWorkerStatus(task.Id, "COMPLETED"); updateErr != nil {
+		log.Printf("Failed to send COMPLETED status: %v", updateErr)
+	}
 	fmt.Println("Command execution completed successfully")
 	w.WriteHeader(http.StatusOK)
 
 }
 
 func isAllowedCommand(command string) bool {
+	trimmed := strings.TrimSpace(command)
 	for _, disallowed := range disAllowedCommands {
-		if strings.HasPrefix(command, disallowed) {
+		if strings.HasPrefix(trimmed, disallowed) {
 			return false
 		}
 	}
@@ -118,7 +127,7 @@ func isAllowedCommand(command string) bool {
 func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(startTime()).String()
 
-	response := HearttbeatResponse{
+	response := HeartbeatResponse{
 		Uptime: uptime,
 	}
 
@@ -126,7 +135,7 @@ func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func registerWorker(workerID, workerIP string) {
+func registerWorker(workerID, workerIP string) error {
 
 	numCPU := runtime.NumCPU()
 	vmStat, _ := mem.VirtualMemory()
@@ -141,26 +150,30 @@ func registerWorker(workerID, workerIP string) {
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Fatalf("Error encoding JSON: %v", err)
+		log.Printf("Error encoding JSON: %v", err)
+		return err
 	}
 
 	registerWorkerURL := coordinatorURL + "/register"
 
 	resp, err := http.Post(registerWorkerURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Fatalf("Error registering to coordinator: %v", err)
+		log.Printf("Error registering to coordinator: %v", err)
+		return err
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Unable to connect to coordinator: %v", resp.StatusCode)
+		log.Printf("Unable to connect to coordinator: %v", resp.StatusCode)
+		return fmt.Errorf("status code %d", resp.StatusCode)
 	}
 
 	log.Printf("Worker %s has been registered\n", workerID)
+	return nil
 }
 
-func updateWorkerStatus(taskId, output string) {
+func updateWorkerStatus(taskId, output string) error {
 	// sends task update to the coordinator
 	data := map[string]interface{}{
 		"task_id": taskId,
@@ -169,23 +182,27 @@ func updateWorkerStatus(taskId, output string) {
 
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Fatalf("Error encoding JSON: %v", err)
+		log.Printf("Error encoding JSON: %v", err)
+		return err
 	}
 
 	jobUpdateURL := coordinatorURL + "/jobStatusUpdate"
 
 	resp, err := http.Post(jobUpdateURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Fatalf("Error sending task update to coordinator: %v", err)
+		log.Printf("Error sending task update to coordinator: %v", err)
+		return err
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Unable to connect to coordinator: %v", resp.StatusCode)
+		log.Printf("Unable to connect to coordinator: %v", resp.StatusCode)
+		return fmt.Errorf("status code %d", resp.StatusCode)
 	}
 
 	log.Printf("Task_id: %s has been Updated with status: %s\n", taskId, output)
+	return nil
 }
 
 func getLocalIP() (string, error) {

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class Tasks(db.Model):
     __tablename__ = "tasks"
 
-    id = db.Column(db.Integer, primary_key=True)
+    id = db.Column(db.String(), primary_key=True)
     command = db.Column(db.String(), nullable=False)
     scheduled_at = db.Column(db.DateTime, nullable=False)
     picked_at = db.Column(db.DateTime)

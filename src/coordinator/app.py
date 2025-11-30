@@ -29,7 +29,7 @@ Base = declarative_base()
 class Tasks(Base):
     __tablename__ = "tasks"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(String, primary_key=True)
     command = Column(String(), nullable=False)
     scheduled_at = Column(DateTime, nullable=False)
     picked_at = Column(DateTime)
@@ -146,7 +146,7 @@ class CoordinatorServicer:
                     self.registered_workers[worker_id]["lastHeartBeatTime"] = current_time
                     self.registered_workers[worker_id]["heartBeatMissed"] = 0
                 else:
-                    logger.info(f'Worker {worker_id} did not responce to heartbeat')
+                    logger.info(f'Worker {worker_id} did not response to heartbeat')
                     self.registered_workers[worker_id]['heartBeatMissed'] += 1
         except Exception as e:
             logger.error(f'Error occurred while sending heartbeat to worker: {worker_id} - {str(e)}')
@@ -192,19 +192,22 @@ class CoordinatorServicer:
 
     def fetch_tasks_periodically(self):
         while True:
-            self.fetch_tasks()
+            try:
+                self.fetch_tasks()
+            except Exception as e:
+                logger.error(f"Error fetching tasks: {str(e)}")
             time.sleep(self.fetch_tasks_interval)
 
     def fetch_tasks(self):
         session = _get_session_factory()()
         try:
-            thirty_secounds_delta = datetime.utcnow() + timedelta(seconds=30)
+            thirty_seconds_delta = datetime.utcnow() + timedelta(seconds=30)
 
             tasks = (
                 session.query(Tasks)
                 .filter(
                     Tasks.scheduled_at >= datetime.utcnow(),
-                    Tasks.scheduled_at <= thirty_secounds_delta,
+                    Tasks.scheduled_at <= thirty_seconds_delta,
                     Tasks.picked_at.is_(None),
                 )
                 .order_by(Tasks.scheduled_at)
