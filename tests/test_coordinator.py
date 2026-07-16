@@ -1,80 +1,63 @@
-import unittest
-from unittest.mock import MagicMock, patch
-from coordinator_service import CoordinatorServicer, app
 import json
-import time
+from unittest.mock import MagicMock, patch
+
+from coordinator_service import CoordinatorServicer
 
 
-class TestCoordinatorService(unittest.TestCase):
-
-    def setUp(self):
-        self.coordinator_servicer = CoordinatorServicer()
-
-    def test_worker_registration(self):
-
-        mock_request = MagicMock()
-        mock_request.json.return_value = {
-            'worker_id': '123',
-            'ip': '127.0.0.1',
-            'port': 8080,
-            'metadata': {}
-        }
-
-        with patch('coordinator_service.request', mock_request):
-            response = self.coordinator_servicer.register_worker(mock_request)
-            response_data = json.loads(response)
-            self.assertTrue(response_data['success'])
-            self.assertEqual(response_data['message'], 'Worker 123 registered.')
-
-    def test_worker_heartbeat(self):
-        self.coordinator_servicer.registered_workers = {
-            '123': {
-                'lastHeartBeatTime': time.time(),
-                'heartBeatMissed': 0,
-                'workerIp': '127.0.0.1',
-                'workerPort': 8080,
-                'metadata': {}
-            }
-        }
-
-        self.coordinator_servicer.sendHeartBeat('123')
-        self.assertEqual(self.coordinator_servicer.registered_workers['123']['heartBeatMissed'], 0)
-
-    def test_fetching_and_submitting_tasks(self):
-        self.coordinator_servicer.registered_workers = {
-            '123': {
-                'lastHeartBeatTime': time.time(),
-                'heartBeatMissed': 0,
-                'workerIp': '127.0.0.1',
-                'workerPort': 8080,
-                'metadata': {}
-            }
-        }
-        self.coordinator_servicer.last_assigned_worker_index = -1  # Reset index
-
-        mock_session = MagicMock()
-        mock_task = MagicMock()
-        mock_task.id = 1
-        mock_task.command = "some_command"
-        mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.with_for_update.return_value.all.return_value = [mock_task]
-
-        with patch('coordinator_service.Session', MagicMock(return_value=mock_session)):
-            self.coordinator_servicer.fetch_tasks()
-
-        self.assertEqual(self.coordinator_servicer.last_assigned_worker_index, 0)
-
-    def test_updating_job_status(self):
-        mock_session = MagicMock()
-        mock_task = MagicMock()
-        mock_task.id = 1
-        mock_session.query.return_value.filter_by.return_value.first.return_value = mock_task
-
-        with patch('coordinator_service.Session', MagicMock(return_value=mock_session)):
-            response = self.coordinator_servicer.update_job_status({'task_id': 1, 'status': 'STARTED'})
-            response_data = json.loads(response)
-            self.assertTrue(response_data['success'])
-            self.assertEqual(response_data['message'], 'Task 1 updated successfully')
+def worker(worker_id="worker-1", capacity=1):
+    return {
+        "worker_id": worker_id,
+        "ip": "127.0.0.1",
+        "port": 8081,
+        "max_concurrency": capacity,
+        "metadata": {},
+    }
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_worker_registration_tracks_capacity():
+    service = CoordinatorServicer(start_background_tasks=False)
+    response = json.loads(service.register_worker(worker(capacity=2)))
+    assert response["success"] is True
+    assert service.registered_workers["worker-1"]["max_concurrency"] == 2
+    assert service.registered_workers["worker-1"]["in_flight"] == 0
+
+
+def test_available_worker_respects_concurrency_limit():
+    service = CoordinatorServicer(start_background_tasks=False)
+    service.register_worker(worker(capacity=1))
+    worker_id, _ = service._available_worker()
+    assert worker_id == "worker-1"
+    assert service._available_worker() == (None, None)
+    service._release_worker("worker-1")
+    assert service._available_worker()[0] == "worker-1"
+
+
+def test_completed_status_releases_worker_capacity():
+    service = CoordinatorServicer(start_background_tasks=False)
+    service.register_worker(worker())
+    service.registered_workers["worker-1"]["in_flight"] = 1
+    task = MagicMock(id="task-1", assigned_worker_id="worker-1")
+    session = MagicMock()
+    session.query.return_value.filter_by.return_value.first.return_value = task
+
+    with patch("coordinator_service.Session", MagicMock(return_value=session)):
+        response = json.loads(
+            service.update_job_status({"task_id": "task-1", "status": "COMPLETED", "worker_id": "worker-1"})
+        )
+
+    assert response["success"] is True
+    assert task.status == "completed"
+    assert service.registered_workers["worker-1"]["in_flight"] == 0
+
+
+def test_failed_status_requeues_until_retry_budget_is_exhausted():
+    service = CoordinatorServicer(start_background_tasks=False)
+    task = MagicMock(id="task-1", assigned_worker_id=None, attempts=1, max_attempts=2)
+    session = MagicMock()
+    session.query.return_value.filter_by.return_value.first.return_value = task
+
+    with patch("coordinator_service.Session", MagicMock(return_value=session)):
+        response = json.loads(service.update_job_status({"task_id": "task-1", "status": "FAILED"}))
+
+    assert response["success"] is True
+    assert task.status == "queued"

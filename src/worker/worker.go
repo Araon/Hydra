@@ -9,59 +9,77 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/mem"
 )
 
-type HearttbeatResponse struct {
+type HeartbeatResponse struct {
 	Uptime string `json:"uptime"`
 }
 
 type Task struct {
-	Id      string `json:"task_id"`
-	Command string `json:"command"`
+	ID      string                 `json:"task_id"`
+	JobType string                 `json:"job_type"`
+	Payload map[string]interface{} `json:"payload"`
 }
 
-var port = ":8081"
-var coordinatorURL = os.Getenv("COORDINATOR_URL")
-
-// var workerIP = "127.0.0.1"
-
-// var coordinatorURL = "http://127.0.0.1:5001" // TODO: Pull from config file too
-
-var disAllowedCommands = []string{"rm -rf", "sudo"} // TODO: update or pull from config file.
+var (
+	port           = ":8081"
+	coordinatorURL = os.Getenv("COORDINATOR_URL")
+	workerID       string
+	workspace      = os.Getenv("HYDRA_WORKSPACE")
+	slots          chan struct{}
+)
 
 func main() {
-
 	if coordinatorURL == "" {
 		coordinatorURL = "http://127.0.0.1:5001"
 	}
-	fmt.Println("Coordinator URL:", coordinatorURL)
+	if workspace == "" {
+		workspace = "/work"
+	}
+
+	maxConcurrency := environmentInt("WORKER_MAX_CONCURRENCY", 1)
+	slots = make(chan struct{}, maxConcurrency)
 
 	workerIP, err := getLocalIP()
 	if err != nil {
 		log.Fatalf("Error fetching IP address: %v", err)
 	}
-	workerID := "WID_" + strings.Join(strings.Split(workerIP, "."), "") + strings.Split(port, ":")[1]
-	registerWorker(workerID, workerIP)
+	workerID = "WID_" + strings.Join(strings.Split(workerIP, "."), "") + strings.Split(port, ":")[1]
+	if err := registerWorker(workerIP, maxConcurrency); err != nil {
+		log.Fatalf("Unable to register worker: %v", err)
+	}
+
 	http.HandleFunc("/submit", taskHandler)
-	http.HandleFunc("/heartbeat", heartBeatHandler)
+	http.HandleFunc("/heartbeat", heartbeatHandler)
+	log.Printf("Worker %s running on port %s with capacity %d", workerID, port, maxConcurrency)
 	log.Fatal(http.ListenAndServe(port, nil))
-	fmt.Printf("Worker running on port %s", port)
+}
+
+func environmentInt(name string, fallback int) int {
+	value, err := strconv.Atoi(os.Getenv(name))
+	if err != nil || value < 1 {
+		return fallback
+	}
+	return value
 }
 
 func taskHandler(w http.ResponseWriter, r *http.Request) {
-	// handle the task with safety
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	default:
+		http.Error(w, "Worker is at capacity", http.StatusTooManyRequests)
 		return
 	}
 
@@ -70,122 +88,126 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
-	fmt.Printf("Task received Id: %s\n", strings.Join(strings.Split(task.Id, "-"), ""))
-	fmt.Printf("Command: %s\n", task.Command)
-
-	if !isAllowedCommand(task.Command) {
-		http.Error(w, "Command not allowed - please retry with valid error", http.StatusBadRequest)
-		fmt.Printf("Command can not be allowed")
+	if task.ID == "" {
+		http.Error(w, "task_id is required", http.StatusBadRequest)
 		return
 	}
 
-	cmd := exec.Command(task.Command)
-
-	go func() {
-		go updateWorkerStatus(task.Id, "STARTED")
-		fmt.Println("Command execution started for: ", task.Id)
-		wg.Done()
-
-	}()
-
-	err := cmd.Run()
-
-	if err != nil {
-		fmt.Println("Failed to run command:", err)
-		wg.Wait()
-		go updateWorkerStatus(task.Id, "FAILED")
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+	if err := updateWorkerStatus(task.ID, "STARTED"); err != nil {
+		log.Printf("Unable to report task %s started: %v", task.ID, err)
 	}
-
-	wg.Wait()
-	go updateWorkerStatus(task.Id, "COMPLETED")
-	fmt.Println("Command execution completed successfully")
-	w.WriteHeader(http.StatusOK)
-
-}
-
-func isAllowedCommand(command string) bool {
-	for _, disallowed := range disAllowedCommands {
-		if strings.HasPrefix(command, disallowed) {
-			return false
+	if err := runTask(task); err != nil {
+		log.Printf("Task %s failed: %v", task.ID, err)
+		if updateErr := updateWorkerStatus(task.ID, "FAILED"); updateErr != nil {
+			log.Printf("Unable to report task %s failed: %v", task.ID, updateErr)
 		}
+		http.Error(w, "Task failed", http.StatusInternalServerError)
+		return
 	}
-	return true
+	if err := updateWorkerStatus(task.ID, "COMPLETED"); err != nil {
+		log.Printf("Unable to report task %s completed: %v", task.ID, err)
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
-func heartBeatHandler(w http.ResponseWriter, r *http.Request) {
-	uptime := time.Since(startTime()).String()
-
-	response := HearttbeatResponse{
-		Uptime: uptime,
+func runTask(task Task) error {
+	switch task.JobType {
+	case "echo":
+		message, ok := task.Payload["message"].(string)
+		if !ok || message == "" || len(message) > 1024 {
+			return fmt.Errorf("invalid echo payload")
+		}
+		return exec.Command("echo", message).Run()
+	case "sleep":
+		duration, ok := task.Payload["duration_seconds"].(float64)
+		if !ok || duration < 0 || duration > 300 || duration != float64(int(duration)) {
+			return fmt.Errorf("invalid sleep payload")
+		}
+		return exec.Command("sleep", strconv.Itoa(int(duration))).Run()
+	case "sha256":
+		path, ok := task.Payload["path"].(string)
+		if !ok || path == "" {
+			return fmt.Errorf("invalid sha256 payload")
+		}
+		resolved, err := workspacePath(path)
+		if err != nil {
+			return err
+		}
+		return exec.Command("sha256sum", resolved).Run()
+	default:
+		return fmt.Errorf("unsupported job type %q", task.JobType)
 	}
+}
 
+func workspacePath(path string) (string, error) {
+	root, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.Abs(filepath.Join(root, path))
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(root, resolved)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path must remain inside %s", root)
+	}
+	return resolved, nil
+}
+
+func heartbeatHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(HeartbeatResponse{Uptime: time.Since(startTime()).String()})
 }
 
-func registerWorker(workerID, workerIP string) {
-
-	numCPU := runtime.NumCPU()
+func registerWorker(workerIP string, maxConcurrency int) error {
 	vmStat, _ := mem.VirtualMemory()
 	data := map[string]interface{}{
-		"worker_id": workerID,
-		"ip":        workerIP,
-		"port":      port,
+		"worker_id":       workerID,
+		"ip":              workerIP,
+		"port":            port,
+		"max_concurrency": maxConcurrency,
 		"metadata": map[string]interface{}{
-			"num_cpu":   numCPU,
+			"num_cpu":   runtime.NumCPU(),
 			"total_ram": vmStat.Total,
 		},
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Fatalf("Error encoding JSON: %v", err)
+		return err
 	}
 
-	registerWorkerURL := coordinatorURL + "/register"
-
-	resp, err := http.Post(registerWorkerURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		log.Fatalf("Error registering to coordinator: %v", err)
+	var lastErr error
+	for attempt := 1; attempt <= 30; attempt++ {
+		response, err := http.Post(coordinatorURL+"/register", "application/json", bytes.NewBuffer(jsonData))
+		if err == nil && response.StatusCode == http.StatusOK {
+			response.Body.Close()
+			return nil
+		}
+		if response != nil {
+			response.Body.Close()
+		}
+		lastErr = err
+		time.Sleep(2 * time.Second)
 	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Unable to connect to coordinator: %v", resp.StatusCode)
-	}
-
-	log.Printf("Worker %s has been registered\n", workerID)
+	return fmt.Errorf("registration failed after retries: %v", lastErr)
 }
 
-func updateWorkerStatus(taskId, output string) {
-	// sends task update to the coordinator
-	data := map[string]interface{}{
-		"task_id": taskId,
-		"status":  output,
-	}
-
+func updateWorkerStatus(taskID, status string) error {
+	data := map[string]interface{}{"task_id": taskID, "status": status, "worker_id": workerID}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		log.Fatalf("Error encoding JSON: %v", err)
+		return err
 	}
-
-	jobUpdateURL := coordinatorURL + "/jobStatusUpdate"
-
-	resp, err := http.Post(jobUpdateURL, "application/json", bytes.NewBuffer(jsonData))
+	response, err := http.Post(coordinatorURL+"/jobStatusUpdate", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Fatalf("Error sending task update to coordinator: %v", err)
+		return err
 	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Fatalf("Unable to connect to coordinator: %v", resp.StatusCode)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("coordinator returned %s", response.Status)
 	}
-
-	log.Printf("Task_id: %s has been Updated with status: %s\n", taskId, output)
+	return nil
 }
 
 func getLocalIP() (string, error) {
@@ -198,7 +220,6 @@ func getLocalIP() (string, error) {
 			return ipnet.IP.String(), nil
 		}
 	}
-
 	return "", fmt.Errorf("no suitable IP address found")
 }
 
