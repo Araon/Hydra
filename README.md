@@ -1,4 +1,12 @@
+<p align="center">
+   <img src="https://ik.imagekit.io/ara0n/for_exceptional_broski.png" width="250" height="250">
+</p>
+
 # Hydra
+
+<img src="https://skillicons.dev/icons?i=python,go,flask,postgresql,docker" alt="Python, Go, Flask, PostgreSQL, and Docker" />
+
+![Hydra Hero](docs/HLD.png)
 
 Hydra is a small, capacity-aware edge batch runner. A Scheduler persists typed
 jobs, a Coordinator leases them to available Workers, and Workers run only the
