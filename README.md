@@ -3,89 +3,117 @@
 </p>
 
 # Hydra
-<img src="https://skillicons.dev/icons?i=python,go,flask,postgresql,docker" alt="https://skillicons.dev/icons?i=python,go,flask,postgresql,docker" /> 
 
-</br>
-
-Hydra is a task scheduler designed for handling high task volumes across multiple workers.
+<img src="https://skillicons.dev/icons?i=python,go,flask,postgresql,docker" alt="Python, Go, Flask, PostgreSQL, and Docker" />
 
 ![Hydra Hero](docs/HLD.png)
 
-## Run locally 💻
-create a .env file with the following details
-```.env
-POSTGRES_DB=
-POSTGRES_USER=
-POSTGRES_PASSWORD=
-```
-and then run the following command to build and run using docker
+Hydra is a small, capacity-aware edge batch runner. A Scheduler persists typed
+jobs, a Coordinator leases them to available Workers, and Workers run only the
+allowlisted job types they understand. It is designed for trusted fleets of
+remote machines or pods—not arbitrary shell execution.
+
+## What it does now
+
+- Dispatches immediately when a due task is scheduled, with a one-second scan
+  as recovery for delayed tasks and notification failures.
+- Tracks each worker's declared concurrency and will not lease more work than
+  it can accept.
+- Persists task state, attempts, assigned worker, and lease expiry in
+  PostgreSQL. Failed work retries up to `max_attempts` rather than disappearing.
+- Runs a constrained Raspberry Pi Zero W simulation through a Compose overlay:
+  ARMv6, one CPU, and 512 MiB RAM per worker.
+
+The coordinator is intentionally single-instance. For high availability or a
+large untrusted multi-tenant queue, use a mature queue/Kubernetes Job system.
+
+## Run locally
+
+Create `.env` from the example:
 
 ```bash
-docker compose up --scale worker=3
+cp .env.example .env
+docker compose up --build --scale worker=3
 ```
 
-## Details
-Written in Python and GO, it comprises:
+The local services are exposed at Scheduler `http://localhost:5000` and
+Coordinator `http://localhost:5001`.
 
-- Scheduler: Receives tasks and schedules them for execution.
-- Coordinator: Manages task selection, worker registration, and distribution of tasks for execution.
-- Worker: Executes assigned tasks, reporting status back to the Coordinator.
-- Database: PostgreSQL database stores task details, aiding task management.
+### Raspberry Pi Zero W distributed test
 
-Communication between components uses https for scalability and fault tolerance.
+Run ten ARMv6 workers, each capped at one CPU and 512 MiB:
 
-### Scheduler 🗓️
-This is a simple Flask application that provides a RESTful API for scheduling tasks. The application uses SQLAlchemy as an ORM for interacting with the database.
-The scheduler acts as the i/o for the system and has the has the following responsibilities
-
-- Schedule a task with a command and a scheduled time.
-- Retrieve a task by its ID.
-
-Below are the endpoints avaliable
-```curl
-POST /schedule
-{
-   "command":"./run_cleanup.sh",
-   "scheduled_at": ""
-}
+```bash
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.pi-zero-w.yml \
+  up --build --scale worker=10
 ```
 
-Schedule a new task. The request body should be a JSON object with a command and a scheduled_at field. The scheduled_at should be in ISO format.
+The limits and ARMv6 instruction set are real Docker constraints. Wall-clock
+speed still depends on the local host and its emulator.
 
-```curl
-GET /schedule/<task_id>
+## Schedule a job
+
+`POST /schedule` accepts a typed job rather than a raw shell command. Every
+job needs `scheduled_at` in ISO 8601 form; `max_attempts` defaults to `3`.
+
+```bash
+curl -X POST http://localhost:5000/schedule \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "job_type": "sleep",
+    "payload": {"duration_seconds": 2},
+    "scheduled_at": "2026-07-17T12:00:00",
+    "max_attempts": 3
+  }'
 ```
-Retrieve a task status by its ID.
 
-### Coordinator 🧠
-This is a Flask application that provides a RESTful API for a task coordinator service. The coordinator service is responsible for managing tasks and workers. It schedules tasks to be executed by workers, maintains the status of tasks, and handles worker registration and heartbeats.
+Available built-in jobs are:
 
-Below are the responsibities
+| Job type | Payload | Purpose |
+| --- | --- | --- |
+| `echo` | `{"message":"..."}` | Safe connectivity and dispatch check. |
+| `sleep` | `{"duration_seconds":0..300}` | Controlled parallelism and timing test. |
+| `sha256` | `{"path":"relative/path"}` | Hash a file below the worker's `HYDRA_WORKSPACE` (`/work` by default). |
 
-- Register and unregister workers
-- Schedule tasks to be picked up by workers
-- Update task status (started, completed, failed)
-- Periodically fetch tasks and assign them to available workers
-- Handle worker heartbeats to monitor their availability
+Workers reject unknown job types and paths outside their workspace. Add a new
+job type in `src/worker/worker.go` when a fleet needs a new trusted operation.
 
-Background Tasks
+Inspect task state with:
 
-The coordinator periodically fetches tasks that are scheduled to run within the next 30 seconds and assigns them to available workers using round-robin scheduling.
-The coordinator checks worker heartbeats periodically to monitor their availability and unregisters workers that have missed too many heartbeats.
+```bash
+curl http://localhost:5000/schedule/<task-id>
+```
 
-### Worker 💪
+## Architecture
 
-This is a Go application that provides a RESTful API for a worker service. The worker service is responsible for executing tasks assigned to it by the coordinator service, sending heartbeats to the coordinator, and updating the status of tasks it is executing.
+```text
+Scheduler --persist + notify--> Coordinator --lease--> available Worker
+    |                            |                       |
+PostgreSQL <---------------------+<------ status ---------+
+```
 
-Below are the responsibities
-- Register with the coordinator service
-- Receive tasks from the coordinator service
-- Execute tasks and update their status
-- Send heartbeats to the coordinator service
+Workers register their IP, port, and `WORKER_MAX_CONCURRENCY`. The coordinator
+round-robins only across workers whose in-flight leases are below that limit.
+A completed job releases the worker; a failed or expired lease is retried until
+its attempt budget is exhausted.
 
-Background Tasks
+## Verification
 
-- The worker registers itself with the coordinator service when it starts.
-- The worker sends heartbeats to the coordinator service to monitor its availability.
-- The worker updates the status of tasks it is executing (started, completed, failed).
+The Compose `tests` service runs the unit suite:
 
+```bash
+docker compose run --rm tests
+```
+
+The official Raspberry Pi profile test ran 20 two-second jobs on ten workers:
+all 20 completed, all 10 workers were used, and the two waves took 4.68 seconds.
+An invalid workspace job retried twice and reached a persisted `failed` state.
+
+## Security notes
+
+Hydra currently trusts the network between Scheduler, Coordinator, and Workers.
+Use a private network, service authentication, and TLS/mTLS before exposing it
+outside a controlled environment. The API deliberately does not execute raw
+shell commands.

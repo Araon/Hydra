@@ -1,0 +1,8 @@
+services:
+  # Internal-only ports keep the test stack isolated from local development.
+  postgres:
+    ports: !reset []
+  scheduler:
+    ports: !reset []
+  coordinator:
+    ports: !reset []

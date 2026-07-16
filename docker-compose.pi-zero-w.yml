@@ -1,0 +1,6 @@
+services:
+  worker:
+    # Raspberry Pi Zero W profile for local distributed-workload tests.
+    platform: linux/arm/v6
+    cpus: "1.0"
+    mem_limit: 512m
